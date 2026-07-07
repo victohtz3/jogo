@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador de Corrida Realista na Chuva</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 15px rgba(0,255,255,0.2);
+            pointer-events: auto;
+        }
+        h1 { margin: 0 0 10px 0; font-size: 20px; text-transform: uppercase; letter-spacing: 2px; color: #00e5ff; }
+        .controls { margin-top: 15px; font-size: 12px; color: #aaa; }
+        select {
+            background: #222;
+            color: white;
+            border: 1px solid #00e5ff;
+            padding: 8px;
+            border-radius: 5px;
+            width: 100%;
+            cursor: pointer;
+            margin-top: 5px;
+        }
+        #hud {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            color: #00e5ff;
+            font-size: 32px;
+            font-family: monospace;
+            background: rgba(0,0,0,0.8);
+            padding: 10px 20px;
+            border-radius: 5px;
+            border-right: 5px solid #00e5ff;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="ui">
+        <h1>Super Drive</h1>
+        <label for="carSelect">Escolha seu Carro:</label>
+        <select id="carSelect">
+            <option value="esportivo">Esportivo Vermelho (Rápido)</option>
+            <option value="musculo">Muscle Car Amarelo (Pesado)</option>
+            <option value="futurista">Cyberpunk Verde (Ágil)</option>
+        </select>
+        <div class="controls">
+            <p><strong>Controles:</strong></p>
+            <p>Seta P/ Cima / W: Acelerar</p>
+            <p>Seta P/ Baixo / S: Ré</p>
+            <p>Setas Laterais / AD: Virar</p>
+            <p>Espaço: Freio de Mão (Som)</p>
+        </div>
+    </div>
+
+    <div id="hud"><span id="speed">0</span> KM/H</div>
+    <div id="canvas-container"></div>
+
+    <script>
+        // --- CONFIGURAÇÃO AUDIO (Web Audio API para som de freio sem precisar de arquivos externos) ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playBrakeSound() {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            
+            let oscillator = audioCtx.createOscillator();
+            let gainNode = audioCtx.createGain();
+            let filter = audioCtx.createBiquadFilter();
+
+            oscillator.type = 'sawtooth';
+            oscillator.frequency.setValueAtTime(120, audioCtx.currentTime);
+            // Efeito de queda de frequência do pneu derrapando
+            oscillator.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.4);
+
+            filter.type = 'bandpass';
+            filter.frequency.value = 800;
+
+            gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+            gainNode.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+
+            oscillator.connect(filter);
+            filter.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.4);
+        }
+
+        // --- CONFIGURAÇÃO VISUAL CENA (Three.js) ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        // Neblina para dar clima de chuva realista e limitar horizonte
+        scene.fog = new THREE.FogExp2(0x1a1a24, 0.015);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(scene.fog.color);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        // Iluminação Noturna/Chuvosa
+        const ambientLight = new THREE.AmbientLight(0x333344, 0.5);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0x7799bb, 0.8);
+        dirLight.position.set(100, 300, 100);
+        scene.add(dirLight);
+
+        // Poste de luz para reflexo no asfalto molhado
+        const streetLight = new THREE.PointLight(0xffaa44, 2, 100);
+        streetLight.position.set(0, 20, 0);
+        scene.add(streetLight);
+
+        // --- PISTA GRANDE ---
+        // Pista circular bem larga e longa
+        const trackRadius = 400;
+        const trackWidth = 30;
+        const trackGeometry = new THREE.RingGeometry(trackRadius - trackWidth, trackRadius + trackWidth, 128);
+        // Material escuro e brilhante simulando asfalto molhado
+        const trackMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0x111111, 
+            roughness: 0.1, 
+            metalness: 0.8,
+            side: THREE.DoubleSide 
+        });
+        const track = new THREE.Mesh(trackGeometry, trackMaterial);
+        track.rotation.x = Math.PI / 2;
+        scene.add(track);
+
+        // Linhas da pista
+        const lineGeometry = new THREE.RingGeometry(trackRadius - 0.2, trackRadius + 0.2, 128);
+        const lineMaterial = new THREE.MeshBasicMaterial({ color: 0xffaa00, side: THREE.DoubleSide });
+        const centerLine = new THREE.Mesh(lineGeometry, lineMaterial);
+        centerLine.rotation.x = Math.PI / 2;
+        centerLine.position.y = 0.01;
+        scene.add(centerLine);
+
+        // --- SISTEMA DE CHUVA ---
+        const rainCount = 8000;
+        const rainGeometry = new THREE.BufferGeometry();
+        const rainPositions = new Float32Array(rainCount * 3);
+
+        for(let i=0; i<rainCount*3; i+=3) {
+            rainPositions[i] = (Math.random() - 0.5) * 400;
+            rainPositions[i+1] = Math.random() * 100;
+            rainPositions[i+2] = (Math.random() - 0.5) * 400;
+        }
+        rainGeometry.setAttribute('position', new THREE.BufferAttribute(rainPositions, 3));
+        const rainMaterial = new THREE.PointsMaterial({
+            color: 0xaaaaaa,
+            size: 0.2,
+            transparent: true,
+            opacity: 0.6
+        });
+        const rain = new THREE.Points(rainGeometry, rainMaterial);
+        scene.add(rain);
+
+        // --- CARRO (Agrupamento e Criação das opções) ---
+        const carGroup = new THREE.Group();
+        scene.add(carGroup);
+
+        // Materiais dos Carros
+        const carMaterials = {
+            esportivo: new THREE.MeshStandardMaterial({ color: 0xd50000, roughness: 0.2, metalness: 0.9 }),
+            musculo: new THREE.MeshStandardMaterial({ color: 0xffd600, roughness: 0.3, metalness: 0.8 }),
+            futurista: new THREE.MeshStandardMaterial({ color: 0x00e676, roughness: 0.1, metalness: 0.9 })
+        };
+
+        let currentCarBody;
+
+        function buildCar(type) {
+            // Remove o visual do carro anterior se houver
+            if(currentCarBody) carGroup.remove(currentCarBody);
+
+            currentCarBody = new THREE.Group();
+
+            // Chassi principal do Carro
+            let bodyGeom;
+            if(type === 'musculo') {
+                bodyGeom = new THREE.BoxGeometry(2.2, 1.2, 5);
+            } else if(type === 'futurista') {
+                bodyGeom = new THREE.CylinderGeometry(0.8, 1.1, 4.5, 4); // Formato aerodinâmico
+                bodyGeom.rotateX(Math.PI/2);
+            } else {
+                bodyGeom = new THREE.BoxGeometry(2, 0.9, 4.5); // Esportivo padrão
+            }
+
+            const body = new THREE.Mesh(bodyGeom, carMaterials[type]);
+            body.position.y = 0.7;
+            body.castShadow = true;
+            currentCarBody.add(body);
+
+            // Cabine
+            const cabinGeom = new THREE.BoxGeometry(1.6, 0.6, 2);
+            const cabinMat = new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 0.1 });
+            const cabin = new THREE.Mesh(cabinGeom, cabinMat);
+            cabin.position.set(0, 1.3, -0.2);
+            currentCarBody.add(cabin);
+
+            // Faróis acesos (Glow)
+            const headlightGeom = new THREE.BoxGeometry(0.4, 0.2, 0.1);
+            const headlightMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const leftLight = new THREE.Mesh(headlightGeom, headlightMat);
+            leftLight.position.set(-0.7, 0.7, 2.26);
+            const rightLight = leftLight.clone();
+            rightLight.position.x = 0.7;
+            currentCarBody.add(leftLight, rightLight);
+
+            // Lanternas Traseiras
+            const tailLightMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            const leftTail = new THREE.Mesh(headlightGeom, tailLightMat);
+            leftTail.position.set(-0.7, 0.7, -2.26);
+            const rightTail = leftTail.clone();
+            rightTail.position.x = 0.7;
+            currentCarBody.add(leftTail, rightTail);
+
+            // Rodas
+            const wheelGeom = new THREE.CylinderGeometry(0.4, 0.4, 0.4, 16);
+            const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 });
+            wheelGeom.rotateZ(Math.PI / 2);
+
+            const wheelPositions = [
+                [-1, 0.4, 1.5], [1, 0.4, 1.5], // Dianteiras
+                [-1, 0.4, -1.5], [1, 0.4, -1.5] // Traseiras
+            ];
+
+            wheelPositions.forEach(pos => {
+                const wheel = new THREE.Mesh(wheelGeom, wheelMat);
+                wheel.position.set(pos[0], pos[1], pos[2]);
+                currentCarBody.add(wheel);
+            });
+
+            carGroup.add(currentCarBody);
+        }
+
+        // Inicializa com o esportivo
+        buildCar('esportivo');
+        carGroup.position.set(trackRadius, 0, 0); // Posiciona o carro no meio da pista
+
+        // --- FÍSICA E MOVIMENTAÇÃO SIMPLES ---
+        let speed = 0;
+        const maxSpeed = 2.5;
+        const accel = 0.03;
+        const deceleration = 0.01;
+        const friction = 0.98;
+        let carAngle = 0;
+
+        const keys = { w: false, s: false, a: false, d: false, space: false };
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') keys.w = true;
+            if (e.key === 'ArrowDown' || e.key.toLowerCase() === 's') keys.s = true;
+            if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') keys.a = true;
+            if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') keys.d = true;
+            if (e.key === ' ') { 
+                if(!keys.space && Math.abs(speed) > 0.5) playBrakeSound();
+                keys.space = true; 
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') keys.w = false;
+            if (e.key === 'ArrowDown' || e.key.toLowerCase() === 's') keys.s = false;
+            if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') keys.a = false;
+            if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') keys.d = false;
+            if (e.key === ' ') keys.space = false;
+        });
+
+        // Troca de carro via Menu UI
+        document.getElementById('carSelect').addEventListener('change', (e) => {
+            buildCar(e.target.value);
+        });
+
+        // --- LOOP DE ANIMAÇÃO PRINCIPAL ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Mover Chuva para baixo
+            const positions = rain.geometry.attributes.position.array;
+            for(let i = 1; i < positions.length; i += 3) {
+                positions[i] -= 1.5; // Velocidade da queda
+                if(positions[i] < 0) positions[i] = 100; // Reseta no topo
+            }
+            rain.geometry.attributes.position.needsUpdate = true;
+
+            // Lógica de física do carro
+            if (keys.w) speed += accel;
+            if (keys.s) speed -= accel;
+            
+            // Aplicação do Freio de mão
+            if (keys.space) {
+                speed *= 0.85; // Desaceleração brusca
+            }
+
+            // Atrito natural do asfalto molhado
+            speed *= friction;
+
+            // Limitar velocidade máxima
+            if (speed > maxSpeed) speed = maxSpeed;
+            if (speed < -maxSpeed/2) speed = -maxSpeed/2;
+
+            // Virar direção (apenas se estiver se movendo)
+            if (Math.abs(speed) > 0.05) {
+                const direction = speed > 0 ? 1 : -1;
+                if (keys.a) carAngle += 0.025 * direction;
+                if (keys.d) carAngle -= 0.025 * direction;
+            }
+
+            // Atualizar rotação e posição do vetor de movimento do carro
+            carGroup.rotation.y = carAngle;
+            carGroup.position.x += Math.sin(carAngle) * speed;
+            carGroup.position.z += Math.cos(carAngle) * speed;
+
+            // Atualizar HUD de velocidade (fictícia baseada na física do game)
+            document.getElementById('speed').innerText = Math.round(Math.abs(speed) * 80);
+
+            // Câmera Perseguição Suave (Atrás do carro)
+            const relativeCameraOffset = new THREE.Vector3(0, 4, -10);
+            const cameraOffset = relativeCameraOffset.applyMatrix4(carGroup.matrixWorld);
+            camera.position.x = THREE.MathUtils.lerp(camera.position.x, cameraOffset.x, 0.1);
+            camera.position.y = THREE.MathUtils.lerp(camera.position.y, cameraOffset.y, 0.1);
+            camera.position.z = THREE.MathUtils.lerp(camera.position.z, cameraOffset.z, 0.1);
+            camera.lookAt(carGroup.position);
+
+            // Luz do poste segue o carro para otimizar iluminação de reflexo
+            streetLight.position.set(carGroup.position.x, 15, carGroup.position.z + 5);
+
+            renderer.render(scene, camera);
+        }
+
+        // Ajustar tamanho do jogo se redimensionar a tela
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Iniciar loop
+        animate();
+    </script>
+</body>
+</html>
