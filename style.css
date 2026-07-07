@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador de Corrida Realista na Chuva</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="ui">
+        <h1>Super Drive</h1>
+        <label for="carSelect">Escolha seu Carro:</label>
+        <select id="carSelect">
+            <option value="esportivo">Esportivo Vermelho (Rápido)</option>
+            <option value="musculo">Muscle Car Amarelo (Pesado)</option>
+            <option value="futurista">Cyberpunk Verde (Ágil)</option>
+        </select>
+        <div class="controls">
+            <p><strong>Controles:</strong></p>
+            <p>Seta P/ Cima / W: Acelerar</p>
+            <p>Seta P/ Baixo / S: Ré</p>
+            <p>Setas Laterais / AD: Virar</p>
+            <p>Espaço: Freio de Mão (Som)</p>
+        </div>
+    </div>
+
+    <div id="hud"><span id="speed">0</span> KM/H</div>
+    <div id="canvas-container"></div>
+
+    <script src="game.js"></script>
+</body>
+</html>
